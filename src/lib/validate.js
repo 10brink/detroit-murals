@@ -35,9 +35,8 @@ export function isValidCloudinaryUrl(url, { cloudName, folderPrefix = '' } = {})
 export function isValidCoordinates(lat, lng) {
 	if (typeof lat !== 'number' || typeof lng !== 'number') return false;
 	if (isNaN(lat) || isNaN(lng)) return false;
-	// Detroit metro area bounds
-	if (lat < 41.0 || lat > 43.5) return false;
-	if (lng < -84.5 || lng > -82.0) return false;
+	if (lat < -90 || lat > 90) return false;
+	if (lng < -180 || lng > 180) return false;
 	return true;
 }
 
