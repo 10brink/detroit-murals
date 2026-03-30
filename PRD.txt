@@ -1,0 +1,267 @@
+PRD: Detroit Mural Map
+
+1. Overview
+
+Web app that displays Detroit street murals on an interactive map. Users can browse by neighborhood, view mural details in a lightbox, flag removed murals, and submit new murals they discover with photo uploads.
+
+This project prioritizes:
+
+- Real infrastructure learning (server, DB, spatial queries, file uploads)
+- A usable product people can actually browse
+- Incremental feature delivery
+
+2. Goals
+
+Primary goals
+- Display 550+ murals on a clustered, interactive map
+- Filter murals by neighborhood (43 neighborhoods)
+- Let users view murals in a full-size lightbox with navigation
+- Let users flag murals that no longer exist
+- Let users submit new murals (pin drop + photo upload)
+- Deploy to a real server (DigitalOcean droplet)
+
+Success criteria
+- App loads at http://<droplet-ip>
+- Map renders with clustered markers that expand on zoom
+- API returns murals within viewport (debounced spatial query)
+- Neighborhood filter works across all 43 areas
+- User can submit a new mural and see it appear on the map
+- Flagged murals are visually distinct (gray, semi-transparent)
+- System handles ~100 concurrent users without failure
+
+3. Non-Goals
+
+- No authentication or user accounts
+- No moderation dashboard (flag counts visible but no admin UI)
+- No mobile-native app (responsive web only)
+- No domain/HTTPS initially (droplet IP only)
+- No server-side image processing (Cloudinary handles optimization)
+
+4. Users
+
+Primary: You (developer / explorer) and local Detroiters browsing murals
+Secondary: Anyone interested in Detroit street art
+
+5. User Stories
+
+Map Viewing
+- As a user, I want to see a map with clustered mural markers
+- As a user, I want clusters to expand as I zoom in
+- As a user, I want markers to update when I move the map
+
+Mural Details
+- As a user, I want to click a mural and see a large photo in a lightbox
+- As a user, I want to navigate left/right through murals with arrows or keyboard
+- As a user, I want to see artist name, address, and neighborhood
+
+Filtering
+- As a user, I want to select a neighborhood from a dropdown
+- As a user, I want to see only murals within that neighborhood
+
+Flagging
+- As a user, I want to flag a mural that no longer exists
+- As a user, I want to see how many times a mural has been flagged
+
+Submission
+- As a user, I want to add a mural I found by dropping a pin on the map
+- As a user, I want to upload a photo of the mural
+- As a user, I want to optionally add the address and artist name
+
+6. Functional Requirements
+
+6.1 Map (Frontend)
+- Mapbox GL JS with streets-v12 style
+- Centered on Detroit (-83.09, 42.35), zoom 12
+- GeoJSON cluster source (clusterRadius: 60, clusterMaxZoom: 15)
+- Gold (#d4a574) markers for active murals, gray for flagged
+- Navigation controls (top-right)
+- Debounced viewport fetch (300ms on moveend)
+
+6.2 API Endpoints
+
+GET /api/murals?bbox=minLng,minLat,maxLng,maxLat
+  Returns murals within viewport (LIMIT 500)
+
+GET /api/murals?neighborhood=name
+  Returns murals matching neighborhood text column
+
+GET /api/areas
+  Returns distinct neighborhoods with mural counts
+
+POST /api/murals
+  Increments flag_count on a mural (body: { id })
+
+POST /api/murals/submit
+  Creates a user-submitted mural (body: { image_url, lat, lng, address?, artist? })
+
+6.3 Backend Logic
+
+Viewport query:
+  SELECT ... FROM murals
+  WHERE geom && ST_MakeEnvelope($1,$2,$3,$4,4326)
+  LIMIT 500;
+
+Neighborhood query:
+  SELECT ... FROM murals WHERE neighborhood = $1 LIMIT 500;
+
+Submit validation:
+  - Require image_url, lat, lng
+  - Bounds check: lat 41-44, lng -85 to -82 (Michigan area)
+  - Set source = 'user', mural_id = NULL
+
+6.4 Database Schema
+
+murals
+  id (serial, pk)
+  mural_id (text, unique) — NULL for user submissions
+  title (text)
+  address (text)
+  artist (text)
+  neighborhood (text)
+  image_url (text)
+  notes (text)
+  source (text, default 'seed') — 'seed' or 'user'
+  flag_count (int, default 0)
+  flagged_at (timestamptz)
+  created_at (timestamptz, default now())
+  geom (geometry(Point, 4326))
+
+areas — kept for future polygon queries
+  id (serial, pk)
+  name (text)
+  slug (text, unique)
+  geom (geometry(MultiPolygon, 4326))
+
+Indexes:
+  CREATE INDEX murals_geom_gix ON murals USING GIST (geom);
+  CREATE INDEX areas_geom_gix ON areas USING GIST (geom);
+
+7. Technical Stack
+
+Frontend
+  SvelteKit 5 (adapter-node)
+  Svelte 5 (runes: $state, $derived)
+  Tailwind CSS v4
+  Mapbox GL JS v3
+
+Backend
+  SvelteKit API routes (no separate Express)
+  pg (node-postgres) with raw SQL — Prisma doesn't support PostGIS
+  PM2 process manager
+
+Database
+  PostgreSQL 17 on Neon (free tier)
+  PostGIS extension
+
+Image Storage
+  Cloudinary (free tier — 25GB storage, 25GB bandwidth/mo)
+  Unsigned upload preset (browser uploads directly, no server-side SDK)
+
+Infrastructure
+  DigitalOcean droplet ($6/mo, Ubuntu 22.04)
+  Nginx reverse proxy
+  Node 20+
+
+8. Deployment
+
+App runs via PM2:
+  pm2 start build/index.js --name mural-map
+
+Nginx routes:
+  :80 → localhost:3000
+
+Environment variables:
+  DATABASE_URL=postgresql://...
+  PUBLIC_MAPBOX_TOKEN=pk....
+  PUBLIC_CLOUDINARY_CLOUD_NAME=...
+  PUBLIC_CLOUDINARY_UPLOAD_PRESET=...
+
+9. Data
+
+Seed data: 550 murals from muralsdb.csv (10brink/muralApp repo)
+  - All 550 have GPS coordinates, addresses, neighborhoods
+  - 409 have named artists
+  - 43 distinct neighborhoods
+  - Image URLs point to GitHub raw content
+
+GeoJSON backup: dt-mi-artwork.json (same 550 as FeatureCollection)
+
+User submissions: stored with source='user', images on Cloudinary
+
+10. UX
+
+Map screen
+  - Fullscreen map with clustered markers
+  - Neighborhood dropdown (top-left) with mural counts
+  - "+ Add Mural" button (top-left, next to dropdown)
+
+Lightbox (on marker click)
+  - Large image with semi-transparent overlay (map visible behind)
+  - Left/right arrows + keyboard navigation
+  - Artist, address, neighborhood metadata
+  - "Flag as removed" button with count
+  - Counter showing position (e.g., "3 / 500")
+
+Pin-drop mode (on "+ Add Mural")
+  - Crosshair cursor, instruction banner
+  - Blue temp marker on click
+  - Submission panel (right side) with:
+    - Photo upload (click to select, preview shown)
+    - Optional address and artist fields
+    - Lat/lng display
+    - Submit / Cancel buttons
+
+11. Risks / Constraints
+
+Risk                              Mitigation
+Prisma lacks spatial support      Use raw SQL with pg
+PostGIS setup complexity          Use Neon managed DB
+Mapbox cost at scale              Stay in free tier (50k loads/mo)
+Cloudinary free tier limits       25GB is plenty for MVP; migrate to S3 if needed
+Spam submissions (no auth)        Flag count + future moderation
+Server crashes                    PM2 auto-restart
+Image hotlinking (GitHub URLs)    Acceptable for seed data; user submissions on Cloudinary
+
+12. Future Extensions
+
+- User accounts + authentication
+- Moderation dashboard (approve/reject submissions, manage flags)
+- Multiple photos per mural
+- Reverse geocoding (auto-fill address from pin location)
+- Search by artist name
+- Walking tour / route planner between murals
+- Favorites / personal lists
+- Multi-city support
+- Server-side image optimization with Sharp
+- HTTPS with Let's Encrypt
+- Custom domain
+
+13. Build Order
+
+Phase 1 — Core map (DONE)
+  1. SvelteKit scaffold + static Mapbox map
+  2. API returns murals from PostGIS
+  3. Clustered markers with viewport queries
+  4. Neighborhood dropdown filter
+  5. Lightbox with navigation
+
+Phase 2 — Community features (DONE)
+  6. Flag as removed (increment count, gray out marker)
+  7. User mural submission (pin drop + Cloudinary upload)
+
+Phase 3 — Deploy
+  8. Build + deploy to DigitalOcean droplet
+  9. Nginx reverse proxy
+  10. PM2 process management
+  11. Smoke test all features on production
+
+14. Definition of Done
+
+- Visiting droplet IP shows working map with 550+ murals
+- Zooming out clusters markers, zooming in expands them
+- Clicking a marker opens full-size lightbox with left/right nav
+- Neighborhood dropdown filters correctly across 43 areas
+- Flagging a mural grays it out and increments the count
+- Submitting a new mural with photo shows it on the map immediately
+- No crashes under light load (~100 concurrent users)
+- End-to-end deploy works via SSH + PM2

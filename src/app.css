@@ -1,0 +1,4 @@
+/* Global styles — imports Tailwind CSS v4, plus mobile safe-area utilities */
+@import 'tailwindcss';
+
+.safe-area-pb { padding-bottom: env(safe-area-inset-bottom, 0px); }
